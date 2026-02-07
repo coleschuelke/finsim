@@ -116,3 +116,47 @@ class Analyzer:
                 print(f"  (You need to SAVE ${abs(required_change):,.2f} more per month)")
             else:
                 print(f"  (You have wiggle room to SPEND ${required_change:,.2f} more per month)")
+
+    def analyze_goal_probability(self, target_nw, years, variable_name='essential_spend', 
+                               start=-2000, end=2000, steps=10):
+        """
+        Sweeps a variable (e.g., change in spend) and calculates success probability for each step.
+        Returns vectors for plotting.
+        """
+        print(f"Sweeping {variable_name} to map probability of reaching ${target_nw:,.0f} in {years} years...")
+        
+        x_values = np.linspace(start, end, steps)
+        probs = []
+        
+        original_spend = self.sim.initial_state.essential_spend
+        
+        for delta in x_values:
+            # Modify State
+            # Note: A negative delta in spend = positive savings
+            self.sim.initial_state.essential_spend = original_spend + delta
+            
+            # Run Monte Carlo (Speed optimized: 50 sims per point)
+            results, _ = self.sim.run_monte_carlo(n_sims=50)
+            
+            # Check Success
+            success_count = 0
+            for r in results:
+                # Get NW at specific year
+                # Check the last record if year matches total duration, or search history
+                if not r['history'].empty:
+                    # Logic to find exact year row
+                    # Assuming full history is returned
+                    val = r['history'].iloc[-1]['Net Worth'] # Simplified: checking end state
+                    if val >= target_nw:
+                        success_count += 1
+            
+            probs.append(success_count / 50)
+            
+        # Reset State
+        self.sim.initial_state.essential_spend = original_spend
+        
+        # Invert X for plotting if we are talking about savings (Spending less = Saving more)
+        # If variable is 'essential_spend', plotting 'Savings Delta' is more intuitive
+        plot_x = -x_values 
+        
+        return plot_x, probs

@@ -95,3 +95,36 @@ class Visualizer:
         plt.tight_layout()
         plt.savefig("Sensitivity_Analysis.png", dpi=100)
         plt.close()
+
+    @staticmethod
+    def plot_probability_curve(x_values, probabilities, x_label="Monthly Savings ($)", title="Probability of Goal Achievement"):
+        """
+        Plots a sigmoid-like curve showing how probability of success changes with an input.
+        Useful for finding the 'knee' where diminishing returns set in.
+        """
+        plt.figure(figsize=(10, 6))
+        
+        # Plot the curve
+        plt.plot(x_values, probabilities, marker='o', linestyle='-', color='#2ca02c', linewidth=2, label='Success Probability')
+        
+        # Add a reference line at 90% (Common engineering confidence interval)
+        plt.axhline(0.90, color='red', linestyle='--', alpha=0.5, label='90% Confidence Target')
+        
+        # Interpolate to find the exact X value for 90%
+        try:
+            # Simple linear interpolation for the crossing point
+            target_x = np.interp(0.90, probabilities, x_values)
+            plt.axvline(target_x, color='red', linestyle=':', alpha=0.5)
+            plt.text(target_x, 0.5, f" Required: ${target_x:,.0f}", rotation=90, verticalalignment='center', color='red')
+        except:
+            pass # 90% not reached or already exceeded
+            
+        plt.title(title, fontsize=14)
+        plt.xlabel(x_label, fontsize=12)
+        plt.ylabel("Probability of Success (0-1)", fontsize=12)
+        plt.grid(True, which='both', linestyle='--', alpha=0.7)
+        plt.ylim(0, 1.05)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig("Probability_Curve.png", dpi=100)
+        plt.close()
