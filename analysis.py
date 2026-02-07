@@ -1,107 +1,118 @@
 import numpy as np
 import scipy.optimize as opt
-from simulator import Simulator
+from simulator import Simulator, ScheduledEvent
+from financial_state import Asset
 import copy
 
 class Analyzer:
     def __init__(self, base_simulator):
         self.sim = base_simulator
 
-    # --- Paradigm 1: Forward Looking ---
-    def purchase_impact_analysis(self, purchase_cost, is_equity=False):
+    # --- Paradigm 1: Forward Looking (Time-Dependent) ---
+    def purchase_impact_analysis(self, purchase_cost, purchase_year, is_equity=False):
         """
-        Runs simulations with and without a purchase.
-        If is_equity=True, converts cash to asset (Net Worth neutral initially).
-        If is_equity=False, cash disappears (Expense).
+        Simulates a purchase occurring in the future.
         """
-        # Scenario A: Do nothing
-        res_a, fail_a = self.sim.run_monte_carlo(n_sims=100)
-        
-        # Scenario B: Purchase
-        state_b = copy.deepcopy(self.sim.initial_state)
-        state_b.cash -= purchase_cost
-        if is_equity:
-            # Add to investments (simplification for this snippet)
-            from financial_state import Asset
-            state_b.investments.append(Asset("New Purchase", purchase_cost, is_liquid=False))
-            
-        sim_b = Simulator(state_b, years=self.sim.years)
-        res_b, fail_b = sim_b.run_monte_carlo(n_sims=100)
-        
-        print(f"Base Case Median NW: ${np.median(res_a):,.2f} (Fail Rate: {fail_a/100:.1%})")
-        print(f"Purchase Case Median NW: ${np.median(res_b):,.2f} (Fail Rate: {fail_b/100:.1%})")
+        print(f"Analyzing purchase of ${purchase_cost:,.0f} in Year {purchase_year}...")
 
-    # --- Paradigm 2: Backward Looking (Goal Seeking) ---
-    def required_savings_for_goal(self, target_nw, probability_threshold=0.9):
-        """
-        Backward looking: Solves for required monthly savings reduction (or addition)
-        to hit a Net Worth goal with X% probability.
-        """
-        print(f"Solving for inputs to achieve ${target_nw:,.0f} with {probability_threshold*100}% probability...")
+        # Define the action to take at purchase_year
+        def execute_purchase(state):
+            state.cash -= purchase_cost
+            if is_equity:
+                # Add asset (assume strictly illiquid initially, like a home or private equity)
+                state.investments.append(Asset(f"Purchase_Y{purchase_year}", purchase_cost, is_liquid=False))
+            # Note: If cash goes negative here, PolicyEngine.manage_liquidity 
+            # will trigger in the next line of the simulator to sell stocks/cover debt.
+
+        # Create simulators
+        # Case A: No Event
+        sim_a = Simulator(self.sim.initial_state, years=self.sim.years)
         
-        def objective(savings_delta):
-            # Clone state
+        # Case B: With Event
+        event = ScheduledEvent(year=purchase_year, action=execute_purchase, description="Major Purchase")
+        sim_b = Simulator(self.sim.initial_state, years=self.sim.years, scheduled_events=[event])
+
+        # Run
+        results_a, fail_a = sim_a.run_monte_carlo(n_sims=100)
+        results_b, fail_b = sim_b.run_monte_carlo(n_sims=100)
+
+        # Extract Medians
+        median_nw_a = np.median([r['final_nw'] for r in results_a])
+        median_nw_b = np.median([r['final_nw'] for r in results_b])
+        
+        print(f"  Baseline Median NW: ${median_nw_a:,.0f} (Fail Rate: {fail_a}%)")
+        print(f"  Purchase Median NW: ${median_nw_b:,.0f} (Fail Rate: {fail_b}%)")
+        print(f"  Delta: ${median_nw_b - median_nw_a:,.0f}")
+
+    # --- Paradigm 2: Backward Looking (Multi-Goal) ---
+    def optimize_for_goals(self, goals):
+        """
+        Solves for the required CHANGE in monthly spend to meet multiple probability goals.
+        goals = [
+            {'metric': 'Net Worth', 'target': 1e6, 'year': 10, 'min_prob': 0.90},
+            {'metric': 'Cash', 'target': 50000, 'year': 5, 'min_prob': 0.95}
+        ]
+        """
+        print(f"Optimizing input inputs for {len(goals)} simultaneous goals...")
+
+        def objective_function(x):
+            """
+            x[0] = change in monthly essential spend (negative = saving more)
+            Returns: Penalty score (0 = all goals met)
+            """
+            spend_delta = x[0]
+            
+            # Temporary State
             temp_state = copy.deepcopy(self.sim.initial_state)
-            # Adjust essential spend (inverse of savings)
-            temp_state.essential_spend -= savings_delta 
+            temp_state.essential_spend += spend_delta
             
+            # Run fast simulation (fewer sims for optimization speed)
             temp_sim = Simulator(temp_state, years=self.sim.years)
-            results, _ = temp_sim.run_monte_carlo(n_sims=50) # Low N for speed in optimization loop
+            results, _ = temp_sim.run_monte_carlo(n_sims=40) 
             
-            # Calculate probability of hitting target
-            success_count = sum(1 for r in results if r >= target_nw)
-            prob = success_count / len(results)
+            penalty = 0
+            for goal in goals:
+                # Filter results for the specific year
+                target_year = goal['year']
+                target_val = goal['target']
+                metric = goal['metric'] # 'Net Worth' or 'Cash'
+                required_prob = goal['min_prob']
+                
+                successes = 0
+                for r in results:
+                    # Get value at specific year from history
+                    # history is a DataFrame, index is steps
+                    hist = r['history']
+                    row = hist[hist['year'] == target_year]
+                    if not row.empty:
+                        val = row.iloc[0][metric] # Take the first month of that year
+                        if val >= target_val:
+                            successes += 1
+                
+                actual_prob = successes / len(results)
+                
+                # Penalty: Square of the shortfall probability
+                # If we need 90% and get 80%, penalty is high. If we get 95%, penalty is 0.
+                shortfall = max(0, required_prob - actual_prob)
+                penalty += shortfall * 100 # Weighting factor
+                
+            # Add a small regularization term to prefer smaller lifestyle changes
+            penalty += abs(spend_delta) * 0.0001
             
-            return prob - probability_threshold
+            return penalty
 
-        # Bisect method to find the zero crossing
-        # Range: Reduce spend by 5k (save more) to Increase spend by 5k
-        try:
-            optimal_delta = opt.bisect(objective, -5000, 5000, xtol=100)
-            print(f"Result: You need to change your monthly spend by ${-optimal_delta:,.2f}")
-        except ValueError:
-            print("Goal unreachable within constraints (+/- $5k/mo spend adjustment).")
-
-    # --- Sensitivity Analysis ---
-    def sensitivity_analysis(self):
-        """
-        Perturbs input factors to see which drives outcome variance most.
-        """
-        base_median = np.median(self.sim.run_monte_carlo(n_sims=50)[0])
+        # Optimization: Minimize penalty
+        # Bound: Can reduce spend by 10k or increase by 10k
+        res = opt.minimize_scalar(objective_function, bounds=(-10000, 10000), method='bounded')
         
-        factors = ['inflation', 'mkt_return']
-        impacts = {}
-        
-        # Access the market engine params inside the sim (conceptual)
-        original_params = copy.deepcopy(self.sim.market.params)
-        
-        for factor in factors:
-            # Shock up
-            self.sim.market.params[factor]['mu'] *= 1.2
-            high_res = np.median(self.sim.run_monte_carlo(n_sims=50)[0])
-            
-            # Shock down
-            self.sim.market.params[factor]['mu'] = original_params[factor]['mu'] * 0.8
-            low_res = np.median(self.sim.run_monte_carlo(n_sims=50)[0])
-            
-            # Reset
-            self.sim.market.params[factor] = copy.deepcopy(original_params[factor])
-            
-            impacts[factor] = high_res - low_res
-            
-        print("Sensitivity (Net Worth Delta):", impacts)
-
-    # --- Cost of Living Comparator ---
-    def col_comparison(self, other_city_col_index, current_city_col_index=100):
-        """
-        Adjusts Spend but NOT Savings. 
-        Most online calcs multiply your whole salary by the CoL index, which is wrong.
-        If you move to a cheaper city, your savings rate effectively explodes.
-        """
-        ratio = other_city_col_index / current_city_col_index
-        new_spend = self.sim.initial_state.essential_spend * ratio
-        savings_delta = self.sim.initial_state.essential_spend - new_spend
-        
-        print(f"Moving to city with CoL {other_city_col_index}:")
-        print(f"  Monthly Spend: ${new_spend:,.2f}")
-        print(f"  Effective Monthly Savings Increase: ${savings_delta:,.2f}")
+        required_change = res.x
+        print(f"Optimization Complete.")
+        if res.fun > 1.0: # Arbitrary threshold implying goals weren't fully met
+            print("  WARNING: Could not find a solution to meet all goals with high probability.")
+            print(f"  Best effort: Change spend by ${required_change:,.2f}/mo")
+        else:
+            print(f"  Solution Found: Adjust monthly spend by ${required_change:,.2f}")
+            if required_change < 0:
+                print(f"  (You need to SAVE ${abs(required_change):,.2f} more per month)")
+            else:
+                print(f"  (You have wiggle room to SPEND ${required_change:,.2f} more per month)")

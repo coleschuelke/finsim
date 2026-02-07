@@ -26,17 +26,28 @@ def input_wizard():
     return state
 
 if __name__ == "__main__":
-    current_state = input_wizard()
-    sim = Simulator(current_state, years=20)
+    # Setup
+    initial = input_wizard() # Defined in previous response
+    sim = Simulator(initial, years=25)
     analyzer = Analyzer(sim)
     
-    print("--- Forward Looking ---")
-    # "With my current situation, if I made this purchase (50k boat)?"
-    analyzer.purchase_impact_analysis(50000, is_equity=False)
+    # 1. Forward Looking: Future Purchase
+    # "Can I afford a $80k vacation home in 5 years?"
+    # Note: is_equity=True means net worth doesn't drop immediately, just liquidity
+    analyzer.purchase_impact_analysis(
+        purchase_cost=80000, 
+        purchase_year=5, 
+        is_equity=True
+    )
     
-    print("\n--- Backward Looking ---")
-    # "What would it require to make probability of hitting $2M > 90%?"
-    analyzer.required_savings_for_goal(2000000, 0.90)
+    print("-" * 30)
     
-    print("\n--- Sensitivity ---")
-    analyzer.sensitivity_analysis()
+    # 2. Backward Looking: Multi-Goal Optimization
+    # "I want $1M Net Worth in 15 years (90% prob) AND 
+    #  I need $100k liquid Cash in 5 years for a business (80% prob)."
+    goals = [
+        {'metric': 'Net Worth', 'target': 1000000, 'year': 15, 'min_prob': 0.90},
+        {'metric': 'Cash', 'target': 100000, 'year': 5, 'min_prob': 0.80}
+    ]
+    
+    analyzer.optimize_for_goals(goals)
