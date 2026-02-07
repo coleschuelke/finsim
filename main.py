@@ -1,6 +1,7 @@
 from financial_state import FinancialState, Asset, Liability, RealEstate
-from simulator import Simulator
+from simulator import Simulator, ScheduledEvent
 from analysis import Analyzer
+from visualizer import Visualizer
 
 def input_wizard():
     # Hardcoded for demo, but this is where the CLI/API inputs go
@@ -51,3 +52,47 @@ if __name__ == "__main__":
     ]
     
     analyzer.optimize_for_goals(goals)
+### With visualization ###
+# if __name__ == "__main__":
+#     # 1. Setup & Run Baseline
+#     state = input_wizard()
+#     sim = Simulator(state, years=20)
+#     results_base, _ = sim.run_monte_carlo(n_sims=200)
+    
+#     # 2. Run Comparison Scenario (e.g., Luxury Purchase in Year 5)
+#     def buy_boat(s): s.cash -= 60000 
+#     event = ScheduledEvent(year=5, action=buy_boat, description="Buy Boat")
+#     sim_boat = Simulator(state, years=20, scheduled_events=[event])
+#     results_boat, _ = sim_boat.run_monte_carlo(n_sims=200)
+    
+#     # 3. Generate Visuals
+#     Visualizer.plot_monte_carlo_paths(results_base, "Baseline Net Worth Projection")
+#     Visualizer.plot_scenario_comparison(results_base, results_boat, "Baseline", "With Purchase")
+    
+#     # 4. Run Sensitivity & Plot
+#     # (Shock variables by 20% and record delta in Median NW)
+#     factors = ['inflation', 'mkt_return', 'salary_growth']
+#     impacts = {}
+#     base_median = np.median([r['final_nw'] for r in results_base])
+    
+#     for f in factors:
+#         # Save original param
+#         orig = sim.market.params[f]['mu']
+        
+#         # Shock Up
+#         sim.market.params[f]['mu'] = orig * 1.2
+#         res_up, _ = sim.run_monte_carlo(50)
+        
+#         # Shock Down
+#         sim.market.params[f]['mu'] = orig * 0.8
+#         res_down, _ = sim.run_monte_carlo(50)
+        
+#         # Record Spread
+#         med_up = np.median([r['final_nw'] for r in res_up])
+#         med_down = np.median([r['final_nw'] for r in res_down])
+#         impacts[f] = med_up - med_down
+        
+#         # Reset
+#         sim.market.params[f]['mu'] = orig
+
+#     Visualizer.plot_sensitivity(impacts)
