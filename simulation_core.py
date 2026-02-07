@@ -19,8 +19,7 @@ class Policies:
         
         remaining_deficit = cash_deficit
         
-        # Sort liquid assets by value to drain smaller accounts first? 
-        # Or drain largest? Let's just iterate order.
+        # Simple policy: Sell first available liquid asset.
         for asset in liquid_assets:
             if remaining_deficit <= 0:
                 break
@@ -68,13 +67,17 @@ class Simulator:
             
             failed = False
             
-            # --- FIX: Convert Annual Inflation to Monthly for Expense compounding ---
+            # --- Inflation Pre-calculation ---
+            # Convert Annual Inflation to Monthly for Expense compounding
             monthly_inflation_factors = 1 + (path_inf / 12.0)
             cumulative_inflation_arr = np.cumprod(monthly_inflation_factors)
 
+            # --- NEW: Initialize Rent from Config ---
+            # Defaults to 0 if not set in config
+            current_rent_base = self.config.get('initial_rent', 0.0)
+
             for t in range(months):
                 if failed:
-                    # If failed, we flatline at 0 to indicate ruin
                     self.results['net_worth'][t, p] = 0
                     continue
 
@@ -86,24 +89,33 @@ class Simulator:
                     monthly_income += inc['amount']
 
                 # 2. Process Scheduled Events
+                # We pass current_rent_base to the event handler so it can modify it (e.g., set to 0)
                 if t in event_schedule:
                     for event in event_schedule[t]:
-                        self._apply_event(port, event, path_house[t])
+                        current_rent_base = self._apply_event(port, event, path_house[t], current_rent_base)
 
                 # 3. Process Expenses
-                # Adjust Essential Spend for Inflation using corrected array
+                
+                # A. Essential Spend (Food, Utilities) - Grows with Inflation
                 current_monthly_spend = self.config['monthly_spend'] * cumulative_inflation_arr[t]
                 
-                # Housing Maintenance
+                # B. Rent - Grows with Inflation (if base is > 0)
+                if current_rent_base > 0:
+                    current_rent_payment = current_rent_base * cumulative_inflation_arr[t]
+                else:
+                    current_rent_payment = 0
+                
+                # C. Housing Maintenance (for owned properties)
                 maint_costs = sum(a.get_maintenance_cost() for a in port.assets if isinstance(a, RealProperty))
                 
-                # Liability Payments
+                # D. Liability Payments (Mortgages, Loans)
                 debt_service = 0
                 for liab in port.liabilities:
                     interest, principal = liab.step(variable_rate_adjuster=0) 
                     debt_service += liab.payment 
                 
-                total_outflow = current_monthly_spend + maint_costs + debt_service
+                # Total Outflow
+                total_outflow = current_monthly_spend + current_rent_payment + maint_costs + debt_service
                 
                 # Unforseen Shock?
                 if path_shock[t] == 1:
@@ -118,7 +130,6 @@ class Simulator:
                         asset.grow(path_house[t])
                     elif isinstance(asset, Asset):
                         # Grow financial assets
-                        # path_mkt is already monthly. path_rates is Annual (grow method expects Annual for risk-free)
                         asset.grow(path_mkt[t], path_rates[t])
                 
                 # 6. Cash Management (Deficit/Surplus)
@@ -139,7 +150,10 @@ class Simulator:
                             self.results['liquidity_failure'][p] = 1
 
                 # Record
-                self.results['net_worth'][t, p] = port.net_worth
+                if failed:
+                    self.results['net_worth'][t, p] = 0
+                else:
+                    self.results['net_worth'][t, p] = port.net_worth
 
     def _map_events(self, total_months):
         schedule = {}
@@ -150,7 +164,13 @@ class Simulator:
                 schedule[m_idx].append(event)
         return schedule
 
-    def _apply_event(self, portfolio, event, current_housing_factor):
+    def _apply_event(self, portfolio, event, current_housing_factor, current_rent):
+        """
+        Applies a financial event to the portfolio.
+        Returns: The updated base rent (usually unchanged, unless buying a home).
+        """
+        new_rent = current_rent
+
         if event['type'] == 'purchase_asset':
             cost = event['value']
             down_payment = event.get('down_payment', cost)
@@ -162,6 +182,10 @@ class Simulator:
             # Add Asset
             if event.get('is_real_estate', False):
                 new_asset = RealProperty(event['name'], cost)
+                
+                # NEW LOGIC: If this is a primary home, we stop paying rent.
+                if event.get('is_primary_home', False):
+                    new_rent = 0
             else:
                 new_asset = Asset(event['name'], cost, allocation_to_market=0) 
             
@@ -176,3 +200,5 @@ class Simulator:
         elif event['type'] == 'param_change':
             if event['param'] == 'monthly_spend':
                 self.config['monthly_spend'] = event['value']
+        
+        return new_rent

@@ -57,9 +57,9 @@ class Analyzer:
         if best_spend:
             delta = original_spend - best_spend
             if delta > 0:
-                print(f"Required Action: Reduce monthly spend by ${delta:,.2f} (New Limit: ${best_spend:,.2f})")
+                print(f"Required Action: Reduce monthly spend by ${delta:,.2f} (New Limit: ${best_spend:,.2f}/mo)")
             else:
-                print(f"You can increase spend by ${abs(delta):,.2f} and still meet the goal.")
+                print(f"You can increase monthly spend by ${abs(delta):,.2f} and still meet the goal.")
         else:
             print("Goal unreachable even with 0 spend.")
 
@@ -86,10 +86,11 @@ class Analyzer:
         
         plt.figure(figsize=(10, 6))
         months = np.arange(len(median))
-        plt.plot(months, median, label='Median', color='blue')
-        plt.fill_between(months, p5, p95, color='blue', alpha=0.1, label='5th-95th Percentile')
+        years = months / 12
+        plt.plot(years, median, label='Median', color='blue')
+        plt.fill_between(years, p5, p95, color='blue', alpha=0.1, label='5th-95th Percentile')
         plt.title("Net Worth Projection")
-        plt.xlabel("Months")
+        plt.xlabel("Years")
         plt.ylabel("Net Worth ($)")
         plt.legend()
         plt.grid(True)

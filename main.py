@@ -18,18 +18,29 @@ def main():
     my_portfolio.add_liability(Liability("Mortgage", 400000, 0.045, 2026, is_mortgage=True))
     my_portfolio.add_liability(Liability("Student Loan", 20000, 0.06, 300))
     
-    # Income (Annual)
-    my_portfolio.incomes.append({'name': 'Salary 1', 'amount': 120000 / 12})
-    my_portfolio.incomes.append({'name': 'Salary 2', 'amount': 95000 / 12})
+    # Income
+    cole_annual = 120000
+    jenna_annual = 140000
+    
+    my_portfolio.incomes.append({
+        'name': 'Cole Salary', 
+        'amount': cole_annual / 12.0  # Monthly
+    })
+    
+    my_portfolio.incomes.append({
+        'name': 'Jenna Salary', 
+        'amount': jenna_annual / 12.0 # Monthly
+    })
 
     # 2. Simulation Configuration
     config = {
-        'years': 10,
+        'years': 15,
         'num_paths': 500, # Monte Carlo iterations
         'seed': 12345,    # Consistent seeding
         
         'tax_rate': 0.28,
         'monthly_spend': 6000, # Essential spend EXCLUDING housing (mortgage handled in logic)
+        'initial_rent': 1200,
         
         # Economic Assumptions
         'base_inflation': 0.03,
@@ -74,10 +85,10 @@ def main():
     
     # 4. Run Backward Analysis (Goal Seeking)
     # Goal: $2M Net Worth in 10 years
-    analyzer.backward_goal_seek(target_nw=2000000, target_probability=0.85)
+    analyzer.backward_goal_seek(target_nw=1_500_000, target_probability=0.80)
 
     # 5. Visuals
-    # analyzer.plot_summary() # Uncomment to view plot
+    analyzer.plot_summary() # Uncomment to view plot
 
 if __name__ == "__main__":
     main()
