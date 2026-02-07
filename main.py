@@ -26,73 +26,76 @@ def input_wizard():
     
     return state
 
-if __name__ == "__main__":
-    # Setup
-    initial = input_wizard() # Defined in previous response
-    sim = Simulator(initial, years=25)
-    analyzer = Analyzer(sim)
-    
-    # 1. Forward Looking: Future Purchase
-    # "Can I afford a $80k vacation home in 5 years?"
-    # Note: is_equity=True means net worth doesn't drop immediately, just liquidity
-    analyzer.purchase_impact_analysis(
-        purchase_cost=80000, 
-        purchase_year=5, 
-        is_equity=True
-    )
-    
-    print("-" * 30)
-    
-    # 2. Backward Looking: Multi-Goal Optimization
-    # "I want $1M Net Worth in 15 years (90% prob) AND 
-    #  I need $100k liquid Cash in 5 years for a business (80% prob)."
-    goals = [
-        {'metric': 'Net Worth', 'target': 1000000, 'year': 15, 'min_prob': 0.90},
-        {'metric': 'Cash', 'target': 100000, 'year': 5, 'min_prob': 0.80}
-    ]
-    
-    analyzer.optimize_for_goals(goals)
-### With visualization ###
 # if __name__ == "__main__":
-#     # 1. Setup & Run Baseline
-#     state = input_wizard()
-#     sim = Simulator(state, years=20)
-#     results_base, _ = sim.run_monte_carlo(n_sims=200)
+#     # Setup
+#     initial = input_wizard() # Defined in previous response
+#     sim = Simulator(initial, years=25)
+#     analyzer = Analyzer(sim)
     
-#     # 2. Run Comparison Scenario (e.g., Luxury Purchase in Year 5)
-#     def buy_boat(s): s.cash -= 60000 
-#     event = ScheduledEvent(year=5, action=buy_boat, description="Buy Boat")
-#     sim_boat = Simulator(state, years=20, scheduled_events=[event])
-#     results_boat, _ = sim_boat.run_monte_carlo(n_sims=200)
+#     # 1. Forward Looking: Future Purchase
+#     # "Can I afford a $80k vacation home in 5 years?"
+#     # Note: is_equity=True means net worth doesn't drop immediately, just liquidity
+#     analyzer.purchase_impact_analysis(
+#         purchase_cost=80000, 
+#         purchase_year=5, 
+#         is_equity=True
+#     )
     
-#     # 3. Generate Visuals
-#     Visualizer.plot_monte_carlo_paths(results_base, "Baseline Net Worth Projection")
-#     Visualizer.plot_scenario_comparison(results_base, results_boat, "Baseline", "With Purchase")
+#     print("-" * 30)
     
-#     # 4. Run Sensitivity & Plot
-#     # (Shock variables by 20% and record delta in Median NW)
-#     factors = ['inflation', 'mkt_return', 'salary_growth']
-#     impacts = {}
-#     base_median = np.median([r['final_nw'] for r in results_base])
+#     # 2. Backward Looking: Multi-Goal Optimization
+#     # "I want $1M Net Worth in 15 years (90% prob) AND 
+#     #  I need $100k liquid Cash in 5 years for a business (80% prob)."
+#     goals = [
+#         {'metric': 'Net Worth', 'target': 1000000, 'year': 15, 'min_prob': 0.90},
+#         {'metric': 'Cash', 'target': 100000, 'year': 5, 'min_prob': 0.80}
+#     ]
     
-#     for f in factors:
-#         # Save original param
-#         orig = sim.market.params[f]['mu']
-        
-#         # Shock Up
-#         sim.market.params[f]['mu'] = orig * 1.2
-#         res_up, _ = sim.run_monte_carlo(50)
-        
-#         # Shock Down
-#         sim.market.params[f]['mu'] = orig * 0.8
-#         res_down, _ = sim.run_monte_carlo(50)
-        
-#         # Record Spread
-#         med_up = np.median([r['final_nw'] for r in res_up])
-#         med_down = np.median([r['final_nw'] for r in res_down])
-#         impacts[f] = med_up - med_down
-        
-#         # Reset
-#         sim.market.params[f]['mu'] = orig
+#     analyzer.optimize_for_goals(goals)
 
-#     Visualizer.plot_sensitivity(impacts)
+
+
+### With visualization ###
+if __name__ == "__main__":
+    # 1. Setup & Run Baseline
+    state = input_wizard()
+    sim = Simulator(state, years=20)
+    results_base, _ = sim.run_monte_carlo(n_sims=200)
+    
+    # 2. Run Comparison Scenario (e.g., Luxury Purchase in Year 5)
+    def buy_boat(s): s.cash -= 60000 
+    event = ScheduledEvent(year=5, action=buy_boat, description="Buy Boat")
+    sim_boat = Simulator(state, years=20, scheduled_events=[event])
+    results_boat, _ = sim_boat.run_monte_carlo(n_sims=200)
+    
+    # 3. Generate Visuals
+    Visualizer.plot_monte_carlo_paths(results_base, "Baseline Net Worth Projection")
+    Visualizer.plot_scenario_comparison(results_base, results_boat, "Baseline", "With Purchase")
+    
+    # 4. Run Sensitivity & Plot
+    # (Shock variables by 20% and record delta in Median NW)
+    factors = ['inflation', 'mkt_return', 'salary_growth']
+    impacts = {}
+    base_median = np.median([r['final_nw'] for r in results_base])
+    
+    for f in factors:
+        # Save original param
+        orig = sim.market.params[f]['mu']
+        
+        # Shock Up
+        sim.market.params[f]['mu'] = orig * 1.2
+        res_up, _ = sim.run_monte_carlo(50)
+        
+        # Shock Down
+        sim.market.params[f]['mu'] = orig * 0.8
+        res_down, _ = sim.run_monte_carlo(50)
+        
+        # Record Spread
+        med_up = np.median([r['final_nw'] for r in res_up])
+        med_down = np.median([r['final_nw'] for r in res_down])
+        impacts[f] = med_up - med_down
+        
+        # Reset
+        sim.market.params[f]['mu'] = orig
+
+    Visualizer.plot_sensitivity(impacts)

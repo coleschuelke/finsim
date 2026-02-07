@@ -1,7 +1,7 @@
 import numpy as np
 
 class MarketEngine:
-    def __init__(self, years, steps_per_year=1):
+    def __init__(self, years, steps_per_year=12):
         self.dt = 1 / steps_per_year
         self.steps = years * steps_per_year
         self.years = years
