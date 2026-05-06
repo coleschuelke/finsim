@@ -24,12 +24,14 @@ def main():
     
     my_portfolio.incomes.append({
         'name': 'Cole Salary', 
-        'amount': cole_annual / 12.0  # Monthly
+        'amount': cole_annual / 12.0,
+        'annual_401k_contribution': 23000 # Maxing out 401k contribution
     })
     
     my_portfolio.incomes.append({
         'name': 'Jenna Salary', 
-        'amount': jenna_annual / 12.0 # Monthly
+        'amount': jenna_annual / 12.0,
+        'annual_401k_contribution': 23000 # Maxing out 401k contribution
     })
 
     # 2. Simulation Configuration
@@ -63,7 +65,17 @@ def main():
                 'down_payment': 10000,
                 'rate': 0.07,
                 'monthly_payment': 900,
-                'is_real_estate': False
+                'is_real_estate': False,
+                'retains_value': False  # <--- Instantly writes off the $60k
+            },
+            {
+                'month': 9, # In 3 years
+                'type': 'purchase_asset',
+                'name': 'Luxury Car',
+                'value': 1000000,
+                'down_payment': 1000000,
+                'is_real_estate': False,
+                'retains_value': False  # <--- Instantly writes off the $60k
             },
             {
                 'month': 60,
@@ -83,11 +95,8 @@ def main():
     analyzer.report_outlook()
     analyzer.sensitivity_analysis()
     
-    # 4. Run Backward Analysis (Goal Seeking)
-    # Goal: $2M Net Worth in 10 years
-    analyzer.backward_goal_seek(target_nw=1_500_000, target_probability=0.80)
 
-    # 5. Visuals
+    # 4. Visuals
     analyzer.plot_summary() # Uncomment to view plot
 
 if __name__ == "__main__":

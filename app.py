@@ -10,6 +10,20 @@ from analysis_engine import Analyzer
 st.set_page_config(page_title="Financial Simulator", layout="wide")
 st.title("Monte Carlo Financial Simulator")
 
+# Helper for payment calculation
+def calculate_pmt(principal, annual_rate, years):
+    if principal <= 0 or years <= 0:
+        return 0.0
+    
+    r = annual_rate / 12.0 # Monthly rate
+    n = years * 12.0       # Total months
+    
+    if r == 0:
+        return principal / n
+    
+    # Standard Amortization Formula
+    return principal * (r * (1 + r)**n) / ((1 + r)**n - 1)
+
 # --- SIDEBAR: Global Settings ---
 st.sidebar.header("Simulation Settings")
 years = st.sidebar.slider("Duration (Years)", 5, 40, 15)
@@ -27,7 +41,11 @@ with tab_finances:
     with col1:
         st.subheader("Assets")
         cash = st.number_input("Cash Savings", value=50000)
-        investments = st.number_input("Invested Assets (Stocks/Bonds)", value=150000)
+        
+        # NEW: Split investments into liquid and illiquid
+        brokerage = st.number_input("Taxable Brokerage (Liquid)", value=50000)
+        retirement_401k = st.number_input("401k / IRA (Illiquid)", value=100000)
+        
         stock_allocation = st.slider("Stock Allocation %", 0.0, 1.0, 0.9)
         
         st.divider()
@@ -36,25 +54,64 @@ with tab_finances:
         
     with col2:
         st.subheader("Liabilities")
-        mortgage_bal = st.number_input("Mortgage Balance", value=0)
-        mortgage_rate = st.number_input("Mortgage Rate (%)", value=4.5) / 100
-        mortgage_pmt = st.number_input("Mortgage Monthly P&I", value=0)
+        
+        # --- Mortgage Section (Auto-Calc) ---
+        mortgage_bal = st.number_input("Mortgage Balance", value=0, step=1000)
+        mortgage_rate = st.number_input("Mortgage Rate (%)", value=4.5, step=0.1) / 100
+        mortgage_years = st.number_input("Remaining Term (Years)", value=30, step=1)
+        
+        # Auto-calculate and display
+        mortgage_pmt = calculate_pmt(mortgage_bal, mortgage_rate, mortgage_years)
+        if mortgage_bal > 0:
+            st.metric("Estimated Mortgage Payment", f"${mortgage_pmt:,.2f}")
         
         st.divider()
-        other_loan_bal = st.number_input("Other Loans (Student/Car)", value=20000)
-        other_loan_rate = st.number_input("Loan Rate (%)", value=6.0) / 100
-        other_loan_pmt = st.number_input("Loan Monthly Payment", value=300)
+        
+        # --- Other Loans (Dynamic Table) ---
+        st.subheader("Other Loans")
+        st.caption("Add multiple loans below. Payment is auto-calculated.")
+        
+        # Default Data Structure
+        default_data = pd.DataFrame(
+            [{"Name": "Student Loan", "Balance": 20000.0, "Rate (%)": 6.0, "Years": 10.0}],
+        )
+        
+        # Editable Table
+        other_loans_df = st.data_editor(
+            default_data, 
+            num_rows="dynamic",
+            column_config={
+                "Name": st.column_config.TextColumn("Loan Name", required=True),
+                "Balance": st.column_config.NumberColumn("Balance ($)", min_value=0, step=1000, format="$%d"),
+                "Rate (%)": st.column_config.NumberColumn("Rate (%)", min_value=0, max_value=100, step=0.1, format="%.1f%%"),
+                "Years": st.column_config.NumberColumn("Term (Years)", min_value=0.1, max_value=50, step=1)
+            },
+            use_container_width=True
+        )
+        
+        # Optional: Show Total Monthly Debt Service from these loans
+        total_other_pmt = 0
+        for _, row in other_loans_df.iterrows():
+            total_other_pmt += calculate_pmt(row["Balance"], row["Rate (%)"]/100, row["Years"])
+            
+        if total_other_pmt > 0:
+            st.metric("Total Other Loan Payments", f"${total_other_pmt:,.2f}")
 
     with col3:
         st.subheader("Income & Spend")
-        # IMPORTANT: Explicit Annual to Monthly conversion for user clarity
-        annual_income_1 = st.number_input("Annual Salary 1", value=120000)
-        annual_income_2 = st.number_input("Annual Salary 2", value=0)
-        tax_rate = st.slider("Effective Tax Rate (%)", 10, 50, 28) / 100
+        st.info("Taxes are auto-calculated using progressive single-filer brackets.")
+        
+        st.markdown("**Person 1**")
+        annual_income_1 = st.number_input("Annual Salary 1", value=120000, step=5000)
+        pretax_401k_1 = st.number_input("Annual 401k Contrib 1 ($)", value=23000, step=500, max_value=23000)
+        
+        st.markdown("**Person 2**")
+        annual_income_2 = st.number_input("Annual Salary 2", value=140000, step=5000)
+        pretax_401k_2 = st.number_input("Annual 401k Contrib 2 ($)", value=23000, step=500, max_value=23000)
         
         st.divider()
-        monthly_spend = st.number_input("Monthly Essential Spend (Food/Life)", value=4000)
-        current_rent = st.number_input("Current Monthly Rent", value=2200)
+        monthly_spend = st.number_input("Monthly Essential Spend (Food/Life)", value=4000, step=500)
+        current_rent = st.number_input("Current Monthly Rent", value=2200, step=100)
 
 with tab_economics:
     col1, col2 = st.columns(2)
@@ -96,6 +153,10 @@ with tab_events:
             ev_is_re = st.checkbox("Is Real Estate?", value=True)
             ev_is_primary = st.checkbox("Is Primary Home? (Stops Rent)", value=True)
             
+            # --- NEW: Toggle for Sunk Cost / Depreciation ---
+            ev_retains_value = st.checkbox("Asset Retains Value (Counts towards Net Worth)", value=True, 
+                                           help="Uncheck this for cars or toys to immediately write off the purchase price as a sunk expense.")
+            
             # Loan details
             c1, c2 = st.columns(2)
             with c1:
@@ -103,29 +164,29 @@ with tab_events:
             with c2:
                 ev_loan_term_years = st.number_input("Loan Term (Years)", value=30, key="ev_loan_term")
             
-            # Auto-calc payment
+            calc_pmt = 0.0
             if ev_cost > ev_down and ev_loan_rate > 0:
                 n = ev_loan_term_years * 12
                 r = ev_loan_rate / 12
                 loan = ev_cost - ev_down
-                calc_pmt = loan * (r * (1 + r)**n) / ((1 + r)**n - 1)
-            else:
-                calc_pmt = 0
+                if loan > 0:
+                    calc_pmt = loan * (r * (1 + r)**n) / ((1 + r)**n - 1)
             
-            ev_pmt = st.number_input("Monthly Payment (Auto-Calc)", value=float(f"{calc_pmt:.2f}"), key="ev_pmt")
+            st.metric("Calculated Monthly Payment", f"${calc_pmt:,.2f}")
 
             if st.button("Add Purchase Event"):
                 new_ev = {
-                    'month': ev_month_idx, # Store the calculated month index
-                    'display_year': ev_year, # Store year for display
+                    'month': ev_month_idx,
+                    'display_year': ev_year,
                     'type': 'purchase_asset',
                     'name': ev_name,
                     'value': ev_cost,
                     'down_payment': ev_down,
                     'rate': ev_loan_rate,
-                    'monthly_payment': ev_pmt,
+                    'monthly_payment': calc_pmt,
                     'is_real_estate': ev_is_re,
-                    'is_primary_home': ev_is_primary
+                    'is_primary_home': ev_is_primary,
+                    'retains_value': ev_retains_value # --- NEW: Append flag to dict ---
                 }
                 st.session_state.events_list.append(new_ev)
                 st.success(f"Added '{ev_name}' at Year {ev_year} (Month {ev_month_idx})")
@@ -174,32 +235,56 @@ def build_config_and_portfolio():
     pf = Portfolio()
     
     # Assets
-    pf.add_asset(Asset("Cash", cash, allocation_to_market=0.0))
-    if investments > 0:
-        pf.add_asset(Asset("Investments", investments, allocation_to_market=stock_allocation))
-    if home_value > 0:
-        pf.add_asset(RealProperty("Primary Home", home_value))
+    pf.add_asset(Asset("Cash", cash, allocation_to_market=0.0, is_liquid=True))
+    
+    # NEW: Construct the split assets with correct liquidity flags
+    if brokerage > 0:
+        pf.add_asset(Asset("Brokerage", brokerage, allocation_to_market=stock_allocation, is_liquid=True))
+    if retirement_401k > 0:
+        pf.add_asset(Asset("401k", retirement_401k, allocation_to_market=stock_allocation, is_liquid=False))
         
     # Liabilities
+    # 1. Mortgage (Calculated above)
     if mortgage_bal > 0:
+        # Note: mortgage_pmt is now calculated in the UI section
         pf.add_liability(Liability("Mortgage", mortgage_bal, mortgage_rate, mortgage_pmt, is_mortgage=True))
-    if other_loan_bal > 0:
-        pf.add_liability(Liability("Loan", other_loan_bal, other_loan_rate, other_loan_pmt))
+    
+    # 2. Other Loans (From DataFrame)
+    if not other_loans_df.empty:
+        for index, row in other_loans_df.iterrows():
+            l_name = row["Name"]
+            l_bal = row["Balance"]
+            l_rate = row["Rate (%)"] / 100.0
+            l_years = row["Years"]
+            
+            if l_bal > 0:
+                # Auto-calc payment for simulation
+                l_pmt = calculate_pmt(l_bal, l_rate, l_years)
+                pf.add_liability(Liability(l_name, l_bal, l_rate, l_pmt))
         
     # Income
-    pf.incomes.append({'name': 'Salary 1', 'amount': annual_income_1 / 12.0})
+    pf.incomes.append({
+        'name': 'Salary 1', 
+        'amount': annual_income_1 / 12.0,
+        'annual_401k_contribution': pretax_401k_1
+    })
+    
     if annual_income_2 > 0:
-        pf.incomes.append({'name': 'Salary 2', 'amount': annual_income_2 / 12.0})
+        pf.incomes.append({
+            'name': 'Salary 2', 
+            'amount': annual_income_2 / 12.0,
+            'annual_401k_contribution': pretax_401k_2
+        })
         
     # 2. Build Config Dict
     config = {
         'years': years,
         'num_paths': num_paths,
         'seed': int(seed),
-        'tax_rate': tax_rate,
+        # Removed the flat 'tax_rate' key entirely
         'monthly_spend': monthly_spend,
         'initial_rent': current_rent,
-        'base_inflation': base_inflation, # This is annual
+        'base_inflation': base_inflation, 
         'base_interest_rate': 0.04,
         'market_params': {
             'expected_mkt_return': exp_market_return,
@@ -271,46 +356,130 @@ if 'sim_results' in st.session_state:
     fig.update_layout(title="Net Worth Projection", xaxis_title="Years", yaxis_title="Net Worth ($)", height=500)
     st.plotly_chart(fig, use_container_width=True) 
 
-    # 3. Goal Seek (in dedicated tab or below)
-    with tab_goals:
-        st.subheader("Backward Looking Goal Seek")
-        target_amount = st.number_input("Target Net Worth ($)", value=2000000)
-        target_prob = st.slider("Required Probability (%)", 50, 99, 80) / 100
+    st.subheader("Deep Dive Analytics")
+    tab_liquid, tab_drawdown, tab_cashflow = st.tabs([
+        "Liquidity vs Total Net Worth", 
+        "Stress Test (Cash Drawdown)", 
+        "Cash Flow Waterfall"
+    ])
+    
+    with tab_liquid:
+        st.info("Tracks total Net Worth against Liquid Assets (Cash + Brokerage). Wide gaps indicate wealth is locked in illiquid assets like real estate.")
+        liq = results['liquid_assets']
+        p50_liq = np.median(liq, axis=1)
         
-        if st.button("Run Goal Seek"):
-            pf_gs, config_gs = build_config_and_portfolio()
-            # Re-instantiate a fresh simulator for the analyzer
-            sim_gs = Simulator(pf_gs, config_gs)
-            analyzer = Analyzer(sim_gs)
+        fig_liq = go.Figure()
+        fig_liq.add_trace(go.Scatter(x=years, y=p50, mode='lines', line=dict(color='blue', width=2), name='Median Total Net Worth'))
+        fig_liq.add_trace(go.Scatter(x=years, y=p50_liq, mode='lines', line=dict(color='green', width=2), name='Median Liquid Assets'))
+        
+        fig_liq.update_layout(xaxis_title="Years", yaxis_title="USD ($)", height=450, hovermode="x unified")
+        st.plotly_chart(fig_liq, use_container_width=True)
+
+    with tab_drawdown:
+        st.info("Shows the absolute lowest cash balance hit during each successful simulation path. If many paths cluster near $0, your cash buffer is too thin.")
+        
+        # Filter for successful paths only, then find the minimum cash balance each path ever hit
+        successful_paths = results['liquidity_failure'] == 0
+        if np.any(successful_paths):
+            cash_history_success = results['cash_balance'][:, successful_paths]
+            min_cash_per_path = np.min(cash_history_success, axis=0)
             
-            # We need to capture the print output or refactor Analyzer to return string
-            # For now, let's just create a custom solver loop here for the UI
-            with st.spinner("Optimizing Spending..."):
-                # Simplified Binary Search for UI
-                original_spend = config_gs['monthly_spend']
-                low = 0
-                high = original_spend * 2
-                best = None
-                
-                for _ in range(8): # Fast iterations
-                    mid = (low + high) / 2
-                    config_gs['monthly_spend'] = mid
-                    temp_sim = Simulator(pf_gs, config_gs)
-                    temp_sim.run()
-                    res = temp_sim.results['net_worth'][-1, :]
-                    prob = np.sum(res >= target_amount) / len(res)
-                    
-                    if prob >= target_prob:
-                        best = mid
-                        low = mid # Can we spend more?
-                    else:
-                        high = mid # Spend less
-                
-                if best:
-                    delta = original_spend - best
-                    if delta > 0:
-                        st.warning(f"Goal Unmet! You need to reduce monthly spend by **${delta:,.2f}** (New Limit: ${best:,.2f})")
-                    else:
-                        st.success(f"Goal Met! You can actually increase spend by **${abs(delta):,.2f}** (New Limit: ${best:,.2f})")
-                else:
-                    st.error("Goal Unreachable even with $0 spend. Try increasing income or extending years.")
+            fig_hist = go.Figure()
+            fig_hist.add_trace(go.Histogram(
+                x=min_cash_per_path, 
+                nbinsx=50,
+                marker_color='orange',
+                name='Paths'
+            ))
+            
+            # Add a vertical line indicating $0 bankruptcy threshold
+            fig_hist.add_vline(x=0, line_width=2, line_dash="dash", line_color="red", annotation_text="Bankruptcy Limit")
+            
+            fig_hist.update_layout(
+                title="Minimum Cash Balance Reached (Successful Paths)",
+                xaxis_title="Lowest Cash Balance ($)",
+                yaxis_title="Number of Paths",
+                height=450
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+        else:
+            st.error("No successful paths to analyze. 100% failure rate.")
+
+    with tab_cashflow:
+        st.info("The average breakdown of where your gross income goes over time.")
+        
+        # Calculate mean across all paths to get the 'expected' cash flow
+        cf_tax = np.mean(results['cf_tax'], axis=1)
+        cf_spend = np.mean(results['cf_spend'], axis=1)
+        cf_debt = np.mean(results['cf_debt'], axis=1)
+        cf_invested = np.mean(results['cf_invested'], axis=1)
+        
+        fig_cf = go.Figure()
+        
+        # Stacked Area Chart (Order matters for stacking: bottom to top)
+        fig_cf.add_trace(go.Scatter(x=years, y=cf_spend, mode='lines', stackgroup='one', name='Living Expenses', fillcolor='rgba(255, 165, 0, 0.7)', line=dict(width=0)))
+        fig_cf.add_trace(go.Scatter(x=years, y=cf_debt, mode='lines', stackgroup='one', name='Debt Service', fillcolor='rgba(255, 99, 71, 0.7)', line=dict(width=0)))
+        fig_cf.add_trace(go.Scatter(x=years, y=cf_tax, mode='lines', stackgroup='one', name='Taxes', fillcolor='rgba(169, 169, 169, 0.7)', line=dict(width=0)))
+        fig_cf.add_trace(go.Scatter(x=years, y=cf_invested, mode='lines', stackgroup='one', name='Saved & Invested', fillcolor='rgba(60, 179, 113, 0.7)', line=dict(width=0)))
+        
+        fig_cf.update_layout(
+            title="Monthly Cash Flow Allocation (Average)",
+            xaxis_title="Years",
+            yaxis_title="Monthly Outflow ($)",
+            height=450,
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_cf, use_container_width=True)
+
+# 3. Goal Seek (in dedicated tab or below)
+with tab_goals:
+    st.subheader("Trade-Off Analysis: Spending vs. Success")
+    st.info("See how increasing or decreasing your monthly spend affects the chance of hitting your Net Worth goal.")
+    
+    target_amount = st.number_input("Target Net Worth ($)", value=2_000_000, step=100_000)
+    
+    if st.button("Generate Trade-Off Curve"):
+        pf_gs, config_gs = build_config_and_portfolio()
+        
+        # Initialize simulator purely to pass to Analyzer
+        sim_gs = Simulator(pf_gs, config_gs) 
+        analyzer = Analyzer(sim_gs)
+        
+        with st.spinner("Running simulations for various spending levels..."):
+            # Run the sweep
+            spends, probs = analyzer.get_probability_sweep(target_amount, steps=20)
+            
+            # Plot with Plotly
+            fig_tradeoff = go.Figure()
+            
+            fig_tradeoff.add_trace(go.Scatter(
+                x=spends, 
+                y=probs, 
+                mode='lines+markers',
+                name='Success Probability',
+                line=dict(color='green', width=3),
+                marker=dict(size=8)
+            ))
+            
+            # Add a vertical line for Current Spend
+            current_spend = config_gs['monthly_spend']
+            fig_tradeoff.add_vline(x=current_spend, line_width=1, line_dash="dash", annotation_text="Current Spend")
+            
+            fig_tradeoff.update_layout(
+                title=f"Probability of Reaching ${target_amount:,.0f}",
+                xaxis_title="Monthly Spend ($)",
+                yaxis_title="Probability of Success (%)",
+                yaxis_range=[0, 105], # 0 to 100%
+                height=500
+            )
+            
+            st.plotly_chart(fig_tradeoff, use_container_width=True)
+            
+            # Interpretation
+            # Find the spend that gives ~80% success (simple approximation)
+            over_80 = [s for s, p in zip(spends, probs) if p >= 80]
+            if over_80:
+                max_safe_spend = max(over_80)
+                st.success(f"To have at least **80% confidence**, keep monthly spend below **${max_safe_spend:,.0f}**.")
+            else:
+                st.error("Even with $0 spend, 80% confidence is not reachable in this timeframe.")

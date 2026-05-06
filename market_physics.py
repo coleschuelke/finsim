@@ -15,9 +15,9 @@ class MarketEngine:
         Generates correlated economic factors using Cholesky decomposition.
         
         Variables: 
-        0: Equity Market Returns (Log-normal)
+        0: Equity Market Returns (Exact GBM)
         1: Inflation (Mean Reverting)
-        2: Interest Rates (Mean Reverting - CIR process approximation)
+        2: Interest Rates (Mean Reverting)
         3: Housing Market Appreciation (Correlated)
         4: Salary Growth (Correlated to Inflation)
         """
@@ -38,7 +38,6 @@ class MarketEngine:
         uncorrelated_shocks = self.rng.standard_normal((5, self.months, self.paths))
         
         # Apply Cholesky to get correlated shocks
-        # Reshape for broadcasting: (5, Months*Paths)
         reshaped_shocks = uncorrelated_shocks.reshape(5, -1)
         correlated_shocks = (L @ reshaped_shocks).reshape(5, self.months, self.paths)
         
@@ -46,8 +45,6 @@ class MarketEngine:
         z_mkt, z_inf, z_rate, z_house, z_sal = correlated_shocks
         
         # 2. Simulate Paths
-        
-        # Pre-allocate
         market_returns = np.zeros((self.months, self.paths))
         inflation = np.zeros((self.months, self.paths))
         interest_rates = np.zeros((self.months, self.paths))
@@ -59,28 +56,33 @@ class MarketEngine:
         curr_inf = config['base_inflation']
         
         # Parameters (Mean Reversion Speed, Volatility, Long-run Mean)
-        # Using simplified discrete approximation
         kappa_inf, theta_inf, vol_inf = 0.5, 0.03, 0.01
         kappa_rate, theta_rate, vol_rate = 0.3, 0.04, 0.015
         
+        # --- NEW: Pre-calculate Exact GBM Constants ---
+        mu = config['expected_mkt_return']
+        sigma = config['mkt_vol']
+        # The drift includes the -0.5 * sigma^2 correction term
+        gbm_drift = (mu - 0.5 * sigma**2) * self.dt
+        gbm_diffusion_scalar = sigma * np.sqrt(self.dt)
+        
         for t in range(self.months):
-            # Market (GBM) - Vectorized
-            market_returns[t] = (config['expected_mkt_return'] * self.dt + 
-                                 config['mkt_vol'] * np.sqrt(self.dt) * z_mkt[t])
+            # Market (Exact GBM Solution) - Vectorized
+            market_returns[t] = np.exp(gbm_drift + gbm_diffusion_scalar * z_mkt[t]) - 1.0
             
             # Inflation (Ornstein-Uhlenbeck)
             d_inf = kappa_inf * (theta_inf - curr_inf) * self.dt + vol_inf * np.sqrt(self.dt) * z_inf[t]
             curr_inf += d_inf
             inflation[t] = curr_inf
             
-            # Interest Rates (CIR - ensures non-negative roughly, simplified here to OU for stability)
+            # Interest Rates 
             d_rate = kappa_rate * (theta_rate - curr_rate) * self.dt + vol_rate * np.sqrt(self.dt) * z_rate[t]
             curr_rate += d_rate
             interest_rates[t] = np.maximum(curr_rate, 0.0) # Floor at 0
             
             # Housing (Correlated with Inflation + local variance)
-            housing_growth[t] = (curr_inf * self.dt + # Base appreciation is inflation
-                                 0.01 * self.dt + # Real growth
+            housing_growth[t] = (curr_inf * self.dt + 
+                                 0.01 * self.dt + 
                                  0.05 * np.sqrt(self.dt) * z_house[t])
             
             # Salary (Inflation + Merit Increase + noise)
@@ -94,5 +96,5 @@ class MarketEngine:
             'interest_rates': interest_rates,
             'housing_growth': housing_growth,
             'salary_growth': salary_growth,
-            'unforseen_shocks': self.rng.binomial(1, 0.01, (self.months, self.paths)) # 1% chance per month of shock
+            'unforseen_shocks': self.rng.binomial(1, 0.01, (self.months, self.paths)) 
         }

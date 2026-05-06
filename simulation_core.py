@@ -3,18 +3,18 @@ import numpy as np
 import copy
 from market_physics import MarketEngine
 from financial_structs import Portfolio, Asset, Liability, RealProperty
+from taxes import TaxEngine
 
 class Policies:
     @staticmethod
     def standard_solvency(portfolio, cash_deficit):
         """
         Policy: If cash is negative, sell LIQUID investments to cover.
-        Ignores RealProperty (illiquid).
         """
-        # Filter for Financial Assets only (exclude Real Estate)
+        # NEW: Added the a.is_liquid check
         liquid_assets = [
             a for a in portfolio.assets 
-            if isinstance(a, Asset) and a.allocation > 0
+            if isinstance(a, Asset) and a.allocation > 0 and getattr(a, 'is_liquid', True)
         ]
         
         remaining_deficit = cash_deficit
@@ -39,11 +39,21 @@ class Simulator:
         self.config = config
         self.physics = MarketEngine(config['years'], config['num_paths'], config.get('seed', 42))
         self.scenarios = self.physics.generate_scenarios(config['market_params'])
+
+        self.tax_engine = TaxEngine()
         
-        # Results storage
+        # In simulation_core.py -> Simulator.__init__
         self.results = {
             'net_worth': np.zeros((self.physics.months, self.physics.paths)),
-            'liquidity_failure': np.zeros(self.physics.paths)
+            'liquidity_failure': np.zeros(self.physics.paths),
+            # NEW: Telemetry arrays
+            'liquid_assets': np.zeros((self.physics.months, self.physics.paths)),
+            'cash_balance': np.zeros((self.physics.months, self.physics.paths)),
+            'cf_gross': np.zeros((self.physics.months, self.physics.paths)),
+            'cf_tax': np.zeros((self.physics.months, self.physics.paths)),
+            'cf_spend': np.zeros((self.physics.months, self.physics.paths)),
+            'cf_debt': np.zeros((self.physics.months, self.physics.paths)),
+            'cf_invested': np.zeros((self.physics.months, self.physics.paths))
         }
 
     def run(self):
@@ -72,8 +82,7 @@ class Simulator:
             monthly_inflation_factors = 1 + (path_inf / 12.0)
             cumulative_inflation_arr = np.cumprod(monthly_inflation_factors)
 
-            # --- NEW: Initialize Rent from Config ---
-            # Defaults to 0 if not set in config
+            # --- Initialize Rent from Config ---
             current_rent_base = self.config.get('initial_rent', 0.0)
 
             for t in range(months):
@@ -81,15 +90,36 @@ class Simulator:
                     self.results['net_worth'][t, p] = 0
                     continue
 
-                # 1. Process Income (Salary Growth)
-                monthly_income = 0
+                # 1. Process Income, Taxes, and 401k Contributions
+                monthly_net_income = 0
+                total_pre_tax_investments = 0
+                monthly_gross_income = 0 # NEW
+                
                 for inc in port.incomes:
                     # Apply salary growth
                     inc['amount'] *= (1 + path_sal[t])
-                    monthly_income += inc['amount']
+                    
+                    monthly_gross_income += inc['amount'] # NEW
+                    
+                    # Calculate net income and 401k contribution per stream
+                    net, pre_tax = self.tax_engine.calculate_monthly_net(
+                        inc['amount'], 
+                        inc.get('annual_401k_contribution', 0.0) 
+                    )
+                    
+                    monthly_net_income += net
+                    total_pre_tax_investments += pre_tax
+
+                # NEW: Calculate actual taxes paid
+                taxes_paid = monthly_gross_income - monthly_net_income - total_pre_tax_investments
+
+                # Route the aggregated 401k contributions directly to the brokerage asset
+                if total_pre_tax_investments > 0:
+                    brokerage = next((a for a in port.assets if "401k" in a.name), None)
+                    if brokerage:
+                        brokerage.value += total_pre_tax_investments
 
                 # 2. Process Scheduled Events
-                # We pass current_rent_base to the event handler so it can modify it (e.g., set to 0)
                 if t in event_schedule:
                     for event in event_schedule[t]:
                         current_rent_base = self._apply_event(port, event, path_house[t], current_rent_base)
@@ -111,8 +141,8 @@ class Simulator:
                 # D. Liability Payments (Mortgages, Loans)
                 debt_service = 0
                 for liab in port.liabilities:
-                    interest, principal = liab.step(variable_rate_adjuster=0) 
-                    debt_service += liab.payment 
+                    interest, principal = liab.step(variable_rate_adjuster=0)
+                    debt_service += (interest + principal)
                 
                 # Total Outflow
                 total_outflow = current_monthly_spend + current_rent_payment + maint_costs + debt_service
@@ -122,7 +152,8 @@ class Simulator:
                     total_outflow += 5000 * cumulative_inflation_arr[t]
 
                 # 4. Net Cash Flow Logic
-                net_cash = monthly_income * (1 - self.config['tax_rate']) - total_outflow
+                # The flat tax_rate config is gone; we use the calculated monthly_net_income
+                net_cash = monthly_net_income - total_outflow
                 
                 # 5. Asset Growth & Rebalancing
                 for asset in port.assets:
@@ -133,7 +164,8 @@ class Simulator:
                         asset.grow(path_mkt[t], path_rates[t])
                 
                 # 6. Cash Management (Deficit/Surplus)
-                cash_asset = port.assets[0] 
+                # BUG FIX: Use centralized method instead of inline logic
+                cash_asset = port.get_liquid_cash_asset()
                 
                 if net_cash >= 0:
                     cash_asset.value += net_cash
@@ -149,11 +181,30 @@ class Simulator:
                             failed = True
                             self.results['liquidity_failure'][p] = 1
 
-                # Record
+                # Record (End of monthly loop)
                 if failed:
                     self.results['net_worth'][t, p] = 0
+                    self.results['liquid_assets'][t, p] = 0
+                    self.results['cash_balance'][t, p] = 0
                 else:
                     self.results['net_worth'][t, p] = port.net_worth
+                    
+                    cash_obj = port.get_liquid_cash_asset()
+                    self.results['cash_balance'][t, p] = cash_obj.value
+                    
+                    # NEW: Only sum Assets where is_liquid is True
+                    self.results['liquid_assets'][t, p] = sum(
+                        a.value for a in port.assets 
+                        if isinstance(a, Asset) and getattr(a, 'is_liquid', True)
+                    )
+                    
+                    self.results['cf_gross'][t, p] = monthly_gross_income
+                    self.results['cf_tax'][t, p] = taxes_paid
+                    self.results['cf_spend'][t, p] = total_outflow - debt_service # Isolate living spend
+                    self.results['cf_debt'][t, p] = debt_service
+                    
+                    # Total capital put to work (Net cash added to savings + 401k contributions)
+                    self.results['cf_invested'][t, p] = net_cash + total_pre_tax_investments
 
     def _map_events(self, total_months):
         schedule = {}
@@ -176,21 +227,23 @@ class Simulator:
             down_payment = event.get('down_payment', cost)
             loan_amount = cost - down_payment
             
-            # Pay Downpayment
-            portfolio.assets[0].value -= down_payment
+            # Fetch correct cash asset dynamically and deduct down payment
+            cash_asset = portfolio.get_liquid_cash_asset()
+            cash_asset.value -= down_payment
             
-            # Add Asset
-            if event.get('is_real_estate', False):
-                new_asset = RealProperty(event['name'], cost)
+            # --- NEW: Only add the asset if it retains value ---
+            if event.get('retains_value', True):
+                if event.get('is_real_estate', False):
+                    new_asset = RealProperty(event['name'], cost)
+                    
+                    if event.get('is_primary_home', False):
+                        new_rent = 0
+                else:
+                    new_asset = Asset(event['name'], cost, allocation_to_market=0) 
                 
-                # NEW LOGIC: If this is a primary home, we stop paying rent.
-                if event.get('is_primary_home', False):
-                    new_rent = 0
-            else:
-                new_asset = Asset(event['name'], cost, allocation_to_market=0) 
+                portfolio.add_asset(new_asset)
             
-            portfolio.add_asset(new_asset)
-            
+            # Always add the liability if financed, even if the asset is treated as a sunk cost
             if loan_amount > 0:
                 new_liab = Liability(f"Loan-{event['name']}", loan_amount, 
                                      event['rate'], event['monthly_payment'], 

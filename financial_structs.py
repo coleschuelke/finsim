@@ -11,12 +11,13 @@ class FinancialEntity:
         self.history.append(self.value)
 
 class Asset(FinancialEntity):
-    def __init__(self, name, value, allocation_to_market=1.0):
+    # NEW: Added is_liquid flag
+    def __init__(self, name, value, allocation_to_market=1.0, is_liquid=True):
         super().__init__(name, value)
-        self.allocation = allocation_to_market # 0.0 to 1.0 (Cash to Stocks)
+        self.allocation = allocation_to_market 
+        self.is_liquid = is_liquid 
 
     def grow(self, market_return, risk_free_rate):
-        # Weighted growth based on allocation
         rate = (market_return * self.allocation) + (risk_free_rate/12 * (1 - self.allocation))
         self.value *= (1 + rate)
 
@@ -39,17 +40,30 @@ class Liability(FinancialEntity):
         self.is_mortgage = is_mortgage
     
     def step(self, variable_rate_adjuster=0):
-        # Allow for variable rates (floating rate debt)
+        # BUG FIX: Prevent zombie debts from calculating negative interest
+        if self.value <= 0:
+            self.value = 0.0
+            return 0.0, 0.0
+
         effective_rate = self.rate + variable_rate_adjuster
         interest = self.value * (effective_rate / 12.0)
         
-        # Amortization
-        principal_pay = self.payment - interest
-        if principal_pay > self.value:
-            principal_pay = self.value
-            
+        # Calculate what we *want* to pay
+        intended_payment = self.payment
+        
+        # Calculate total required to clear debt
+        total_due = self.value + interest
+        
+        # Cap payment
+        actual_payment = min(intended_payment, total_due)
+        
+        # Derive principal reduction (will be negative if payment < interest, causing balance to grow)
+        principal_pay = actual_payment - interest
+        
+        # Update Balance
         self.value -= principal_pay
-        return interest, principal_pay # Return expenses
+        
+        return interest, principal_pay
 
 class Portfolio:
     def __init__(self):
@@ -68,6 +82,13 @@ class Portfolio:
     
     @property
     def net_worth(self): return self.total_assets - self.total_liabilities
+
+    # BUG FIX: Centralized cash retrieval logic
+    def get_liquid_cash_asset(self):
+        cash_asset = next((a for a in self.assets if isinstance(a, Asset) and a.allocation == 0), None)
+        if cash_asset is None:
+            raise ValueError("Portfolio must contain at least one Cash asset (Asset with allocation=0).")
+        return cash_asset
 
     def snapshot_all(self):
         for item in self.assets + self.liabilities:
