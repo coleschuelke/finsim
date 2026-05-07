@@ -213,3 +213,47 @@ class Analyzer:
             fi_prob.append((reached_count / paths) * 100)
             
         return years, fi_prob, crossover_months
+    
+    
+    def optimize_fi_spend(self, swr=0.04, steps=11):
+        """
+        Calculates the median FI crossover year across a range of monthly spending levels.
+        Shows the time-cost of lifestyle inflation.
+        """
+        base_spend = self.sim.config['monthly_spend']
+        # Sweep from $2000 below current spend to $3000 above
+        test_spends = np.linspace(max(1000, base_spend - 2000), base_spend + 3000, steps)
+        
+        fi_years = []
+        
+        for spend in test_spends:
+            test_config = copy.deepcopy(self.sim.config)
+            test_config['monthly_spend'] = spend
+            
+            # Fast simulation run
+            test_sim = Simulator(self.sim.initial_portfolio, test_config)
+            test_sim.run()
+            
+            months = test_sim.physics.months
+            paths = test_sim.physics.paths
+            crossover_months = np.full(paths, -1)
+            
+            for p in range(paths):
+                for t in range(months):
+                    current_spend = test_sim.results['cf_spend'][t, p]
+                    liquid_assets = test_sim.results['liquid_assets'][t, p]
+                    monthly_safe_yield = (liquid_assets * swr) / 12.0
+                    
+                    if monthly_safe_yield >= current_spend and current_spend > 0:
+                        crossover_months[p] = t
+                        break
+            
+            successful_paths = crossover_months[crossover_months >= 0]
+            if len(successful_paths) > (paths * 0.1): # Only count if at least 10% of paths reach FI
+                median_fi = np.median(successful_paths) / 12.0
+            else:
+                median_fi = None # FI not reliably reached
+                
+            fi_years.append(median_fi)
+            
+        return test_spends, fi_years

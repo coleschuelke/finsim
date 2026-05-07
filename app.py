@@ -56,8 +56,8 @@ with st.sidebar:
     salary_growth_merit = st.slider("Salary Merit Increase (%)", 0.0, 5.0, 1.0) / 100
 
 # --- MAIN UI TABS ---
-tab_dash, tab_finances, tab_events, tab_analytics = st.tabs([
-    "📊 Dashboard", "💰 Finances", "📅 Events", "🔬 Deep Analytics"
+tab_dash, tab_finances, tab_events, tab_liquid, tab_analytics = st.tabs([
+    "📊 Dashboard", "💰 Finances", "📅 Events", "💧 Liquid Wealth & FI", "🔬 Deep Analytics"
 ])
 
 # --- TAB: FINANCES ---
@@ -111,7 +111,7 @@ with tab_events:
     
     with ev_col1:
         st.subheader("Add New Event")
-        ev_type = st.selectbox("Type", ["Purchase Asset", "Change Spend"])
+        ev_type = st.selectbox("Type", ["Purchase Asset", "Change Spend", "Change Rent", "Change Income", "Recurring RSU Vest"])
         ev_year = st.number_input("Year of Event (e.g., 1.5)", min_value=0.1, value=3.0, step=0.5)
         ev_month_idx = int(ev_year * 12)
         
@@ -119,7 +119,7 @@ with tab_events:
             ev_name = st.text_input("Asset Name", "Vehicle / House")
             ev_cost = st.number_input("Total Cost", value=50000)
             ev_down = st.number_input("Down Payment", value=10000)
-            ev_retains_val = st.checkbox("Retains Value (Counts toward Net Worth)", value=False, help="Uncheck to write off as a sunk cost immediately.")
+            ev_retains_val = st.checkbox("Retains Value (Counts toward Net Worth)", value=False)
             ev_is_re = st.checkbox("Is Real Estate?", value=False)
             ev_is_primary = st.checkbox("Is Primary Home? (Zeroes out rent)", value=False)
             ev_loan_rate = st.number_input("Loan Rate (%)", value=7.0) / 100
@@ -145,16 +145,80 @@ with tab_events:
                     'param': 'monthly_spend', 'value': ev_new_spend
                 })
                 st.rerun()
+                
+        elif ev_type == "Change Rent":
+            ev_new_rent = st.number_input("New Monthly Rent", value=2500, step=100)
+            if st.button("➕ Add Rent Change", use_container_width=True):
+                st.session_state.events_list.append({
+                    'month': ev_month_idx, 'display_year': ev_year, 'type': 'param_change',
+                    'param': 'rent', 'value': ev_new_rent
+                })
+                st.rerun()
+                
+        elif ev_type == "Change Income":
+            st.info("Income Name must exactly match the name in the Finances tab.")
+            ev_inc_name = st.text_input("Income Name", "Cole")
+            ev_new_salary = st.number_input("New Annual Salary", value=150000, step=5000)
+            ev_new_401k = st.number_input("New Annual 401k Contrib", value=23000, max_value=23000)
+            
+            if st.button("➕ Add Income Change", use_container_width=True):
+                st.session_state.events_list.append({
+                    'month': ev_month_idx, 'display_year': ev_year, 'type': 'change_income',
+                    'income_name': ev_inc_name, 'new_salary': ev_new_salary, 'new_401k': ev_new_401k
+                })
+                st.rerun()
+                
+        elif ev_type == "Recurring RSU Vest":
+            st.info("Simulates recurring stock vests. Taxes are withheld immediately before the net equity hits your portfolio.")
+            ev_rsu_name = st.text_input("Asset Bucket Name", "Company Stock")
+            ev_rsu_val = st.number_input("Gross Vest Value ($)", value=25000, step=5000)
+            ev_rsu_freq = st.number_input("Vest Frequency (Months)", value=6, step=1, help="6 = Bi-annually, 3 = Quarterly")
+            ev_rsu_tax = st.slider("Estimated Tax Withholding (%)", 10, 50, 30) / 100.0
+            
+            if st.button("➕ Add Recurring Vest", use_container_width=True):
+                st.session_state.events_list.append({
+                    'month': ev_month_idx, 'display_year': ev_year, 'type': 'rsu_vest',
+                    'asset_name': ev_rsu_name, 'value': ev_rsu_val, 'frequency': ev_rsu_freq,
+                    'tax_withholding': ev_rsu_tax
+                })
+                st.rerun()
 
     with ev_col2:
         st.subheader("Scheduled Events")
         if st.session_state.events_list:
-            df_events = pd.DataFrame([{
-                "Year": e['display_year'], 
-                "Action": f"Buy {e['name']}" if e['type'] == 'purchase_asset' else "Change Spend",
-                "Value": f"${e['value']:,.0f}",
-                "Sunk Cost": "Yes" if not e.get('retains_value', True) else "No"
-            } for e in st.session_state.events_list])
+            display_data = []
+            for e in st.session_state.events_list:
+                freq_str = f" (Every {e['frequency']} mo)" if e.get('frequency', 0) > 0 else ""
+                
+                if e['type'] == 'purchase_asset':
+                    action_str = f"Buy {e['name']}"
+                    val_str = f"${e['value']:,.0f}"
+                    sunk_str = "Yes" if not e.get('retains_value', True) else "No"
+                elif e['type'] == 'change_income':
+                    action_str = f"Change Salary ({e['income_name']})"
+                    val_str = f"${e['new_salary']:,.0f}/yr"
+                    sunk_str = "N/A"
+                elif e['type'] == 'param_change' and e['param'] == 'monthly_spend':
+                    action_str = "Change Spend"
+                    val_str = f"${e['value']:,.0f}/mo"
+                    sunk_str = "N/A"
+                elif e['type'] == 'param_change' and e['param'] == 'rent':
+                    action_str = "Change Rent"
+                    val_str = f"${e['value']:,.0f}/mo"
+                    sunk_str = "N/A"
+                elif e['type'] == 'rsu_vest':
+                    action_str = f"RSU Vest: {e['asset_name']}{freq_str}"
+                    val_str = f"${e['value']:,.0f} gross"
+                    sunk_str = "N/A"
+                    
+                display_data.append({
+                    "Start Year": e['display_year'], 
+                    "Action": action_str,
+                    "Amount": val_str,
+                    "Sunk Cost": sunk_str
+                })
+                
+            df_events = pd.DataFrame(display_data)
             st.dataframe(df_events, use_container_width=True, hide_index=True)
             if st.button("🗑️ Clear All Schedule"):
                 st.session_state.events_list = []
@@ -234,6 +298,74 @@ if st.session_state.sim_run:
         
         fig_main.update_layout(title="Wealth Trajectory", xaxis_title="Years", yaxis_title="USD ($)", hovermode="x unified", height=500)
         st.plotly_chart(fig_main, use_container_width=True)
+    
+    with tab_liquid:
+        st.header("Liquid Wealth & Financial Independence")
+        st.info("These metrics strictly exclude primary home equity and illiquid retirement accounts (401k/IRA).")
+        
+        liq = results['liquid_assets']
+        final_liq = liq[-1, :]
+        
+        l1, l2, l3 = st.columns(3)
+        l1.metric("Median Liquid Wealth (End)", f"${np.median(final_liq):,.0f}")
+        l2.metric("Pessimistic Liquid (5th %)", f"${np.percentile(final_liq, 5):,.0f}")
+        l3.metric("Optimistic Liquid (95th %)", f"${np.percentile(final_liq, 95):,.0f}")
+        
+        # 1. Pure Liquid Fan Chart
+        fig_liq = go.Figure()
+        fig_liq.add_trace(go.Scatter(x=time_axis, y=np.percentile(liq, 95, axis=1), mode='lines', line=dict(width=0), showlegend=False))
+        fig_liq.add_trace(go.Scatter(x=time_axis, y=np.percentile(liq, 5, axis=1), mode='lines', fill='tonexty', fillcolor='rgba(34, 139, 34, 0.1)', name='5th-95th Range'))
+        fig_liq.add_trace(go.Scatter(x=time_axis, y=np.median(liq, axis=1), mode='lines', line=dict(color='green', width=3), name='Median Liquid Assets'))
+        
+        fig_liq.update_layout(title="Liquid Wealth Trajectory (No House/401k)", xaxis_title="Years", yaxis_title="USD ($)", hovermode="x unified", height=400)
+        st.plotly_chart(fig_liq, use_container_width=True)
+        
+        st.divider()
+        st.subheader("Accelerating Financial Independence")
+        
+        c_swr, c_run = st.columns([1, 4])
+        with c_swr:
+            swr_input = st.number_input("Target SWR (%)", value=4.0, step=0.1) / 100.0
+            
+        with c_run:
+            st.write("Calculate how adjusting your baseline monthly spend moves your FI date. The line represents the year your safe withdrawal yield eclipses your living expenses.")
+            if st.button("Run FI Spend Sweep", use_container_width=True):
+                with st.spinner("Solving FI crossover for spending matrix..."):
+                    spends, fi_years = analyzer.optimize_fi_spend(swr=swr_input)
+                    
+                    # Filter out None values for plotting
+                    plot_spends = [s for s, y in zip(spends, fi_years) if y is not None]
+                    plot_years = [y for y in fi_years if y is not None]
+                    
+                    if plot_years:
+                        fig_accel = go.Figure()
+                        fig_accel.add_trace(go.Scatter(
+                            x=plot_spends, y=plot_years, mode='lines+markers',
+                            line=dict(color='purple', width=3), marker=dict(size=8),
+                            name="FI Year"
+                        ))
+                        
+                        # Add a vertical marker for current spend
+                        current_spend = config['monthly_spend']
+                        fig_accel.add_vline(x=current_spend, line_width=2, line_dash="dash", line_color="red", annotation_text="Current Spend")
+                        
+                        fig_accel.update_layout(
+                            title="Time-Cost of Lifestyle (Spend vs. FI Year)",
+                            xaxis_title="Baseline Monthly Spend ($)",
+                            yaxis_title="Years to FI",
+                            height=400,
+                            hovermode="x unified"
+                        )
+                        st.plotly_chart(fig_accel, use_container_width=True)
+                        
+                        # Calculate the slope to give a direct time/cost metric
+                        if len(plot_spends) > 1:
+                            delta_spend = plot_spends[-1] - plot_spends[0]
+                            delta_years = plot_years[-1] - plot_years[0]
+                            years_per_1k = (delta_years / delta_spend) * 1000
+                            st.success(f"**Optimization Metric:** At your current trajectory, every **$1,000/mo** added to your baseline lifestyle delays FI by approximately **{years_per_1k:.1f} years**.")
+                    else:
+                        st.error("FI is not reachable within the simulation timeframe at any of these spending levels.")
 
     with tab_analytics:
         st.header("Advanced Scenario Analysis")

@@ -209,16 +209,28 @@ class Simulator:
     def _map_events(self, total_months):
         schedule = {}
         for event in self.config.get('events', []):
-            m_idx = event['month']
-            if m_idx < total_months:
-                if m_idx not in schedule: schedule[m_idx] = []
-                schedule[m_idx].append(event)
+            start_m_idx = event['month']
+            freq = event.get('frequency', 0)
+            
+            if freq > 0:
+                # Recurring event
+                curr_m = start_m_idx
+                while curr_m < total_months:
+                    if curr_m not in schedule: schedule[curr_m] = []
+                    schedule[curr_m].append(event)
+                    curr_m += freq
+            else:
+                # One-time event
+                if start_m_idx < total_months:
+                    if start_m_idx not in schedule: schedule[start_m_idx] = []
+                    schedule[start_m_idx].append(event)
+                    
         return schedule
 
     def _apply_event(self, portfolio, event, current_housing_factor, current_rent):
         """
         Applies a financial event to the portfolio.
-        Returns: The updated base rent (usually unchanged, unless buying a home).
+        Returns: The updated base rent.
         """
         new_rent = current_rent
 
@@ -227,15 +239,12 @@ class Simulator:
             down_payment = event.get('down_payment', cost)
             loan_amount = cost - down_payment
             
-            # Fetch correct cash asset dynamically and deduct down payment
             cash_asset = portfolio.get_liquid_cash_asset()
             cash_asset.value -= down_payment
             
-            # --- NEW: Only add the asset if it retains value ---
             if event.get('retains_value', True):
                 if event.get('is_real_estate', False):
                     new_asset = RealProperty(event['name'], cost)
-                    
                     if event.get('is_primary_home', False):
                         new_rent = 0
                 else:
@@ -243,7 +252,6 @@ class Simulator:
                 
                 portfolio.add_asset(new_asset)
             
-            # Always add the liability if financed, even if the asset is treated as a sunk cost
             if loan_amount > 0:
                 new_liab = Liability(f"Loan-{event['name']}", loan_amount, 
                                      event['rate'], event['monthly_payment'], 
@@ -253,5 +261,32 @@ class Simulator:
         elif event['type'] == 'param_change':
             if event['param'] == 'monthly_spend':
                 self.config['monthly_spend'] = event['value']
+            elif event['param'] == 'rent':
+                new_rent = event['value']
+                
+        elif event['type'] == 'change_income':
+            target_name = event['income_name']
+            for inc in portfolio.incomes:
+                if inc['name'] == target_name:
+                    inc['amount'] = event['new_salary'] / 12.0
+                    if 'new_401k' in event:
+                        inc['annual_401k_contribution'] = event['new_401k']
+                    break
+                    
+        elif event['type'] == 'rsu_vest':
+            # Simulate sell-to-cover for taxes
+            gross_vest = event['value']
+            net_vest = gross_vest * (1 - event.get('tax_withholding', 0.22))
+            
+            # Find the stock asset bucket, or create it if it doesn't exist
+            target_asset_name = event.get('asset_name', 'Company Stock')
+            stock_asset = next((a for a in portfolio.assets if a.name == target_asset_name), None)
+            
+            if stock_asset:
+                stock_asset.value += net_vest
+            else:
+                # Defaults to liquid, 100% market allocation (equity)
+                new_stock = Asset(target_asset_name, net_vest, allocation_to_market=1.0, is_liquid=True)
+                portfolio.add_asset(new_stock)
         
         return new_rent
